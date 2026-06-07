@@ -10,6 +10,11 @@ import (
 // |  2B  |   2B  | nkeys × 8B | nkeys × 2B |     ...    |        |
 type BNode []byte
 
+func (BNode) estimateBytes(nkeys, offset uint16) uint16 {
+	// Header + 8B pointer per key + 2B offset per key + size of key-values up to offset.
+	return 4 + 8*nkeys + 2*nkeys + offset
+}
+
 func (node BNode) btype() uint16 {
 	return binary.LittleEndian.Uint16(node[0:2])
 }
