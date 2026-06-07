@@ -1,6 +1,7 @@
 package tree
 
 import (
+	"bytes"
 	"log"
 )
 
@@ -26,6 +27,30 @@ func LeafInsert(newNode, oldNode BNode, idx uint16, key, value []byte) {
 	NodeAppendRange(newNode, oldNode, 0, 0, idx)
 	NodeAppendKeyValue(newNode, idx, 0, key, value)
 	NodeAppendRange(newNode, oldNode, idx+1, idx, oldNode.nkeys()-idx)
+}
+
+func LeafUpdate(newNode, oldNode BNode, idx uint16, key, value []byte) {
+	newNode.SetHeader(NODE_TYPE_LEAF, oldNode.nkeys())
+	NodeAppendRange(newNode, oldNode, 0, 0, idx)
+	NodeAppendKeyValue(newNode, idx, 0, key, value)
+	NodeAppendRange(newNode, oldNode, idx+1, idx+1, oldNode.nkeys()-idx-1)
+}
+
+// Find the last postion that is less than or equal to the key.
+func NodeLookupLessThanOrEqual(node BNode, key []byte) uint16 {
+	// Could be done using binary search.
+	for i := range node.nkeys() {
+		cmp := bytes.Compare(node.GetKey(i), key)
+		if cmp == 0 {
+			// Equal
+			return i
+		}
+		if cmp > 0 {
+			// i-th key larger than target key
+			return i - 1
+		}
+	}
+	return node.nkeys() - 1
 }
 
 func NodeAppendRange(newNode, oldNode BNode, dstNew, srcOld, n uint16) {
