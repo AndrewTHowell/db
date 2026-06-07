@@ -26,7 +26,18 @@ func init() {
 type ErrIndex string
 
 func (e ErrIndex) Error() string {
-	return fmt.Sprintf("index error: %s", e)
+	return fmt.Sprintf("index error: %s", string(e))
+}
+
+func NodeAppendKeyValue(node BNode, idx uint16, ptr uint64, key, value []byte) error {
+	if idx >= node.nkeys() {
+		return ErrIndex("list index out of range")
+	}
+	node.setPtr(idx, ptr)
+	keyValue := newKeyValue(node[node.keyValuePosition(idx):], key, value)
+	// Set offset for next key.
+	node.setOffset(idx+1, node.getOffset(idx)+uint16(len(keyValue)))
+	return nil
 }
 
 // Binary format - node:
@@ -77,19 +88,30 @@ func (node BNode) getOffset(idx uint16) uint16 {
 }
 
 // Assumes idx has been validated to be within valid range.
+func (node BNode) setOffset(idx, offset uint16) {
+	if idx == 0 {
+		// First offset isn't stored, it's always zero.
+		return
+	}
+	// Skip 4B header and nkeys*8B pointers.
+	// Go to N-1th offset (as 0th isn't stored) with each offset being 2B.
+	binary.LittleEndian.PutUint16(node[4+(node.nkeys()*8)+((idx-1)*2):], offset)
+}
+
+// Assumes idx has been validated to be within valid range.
 func (node BNode) keyValuePosition(idx uint16) uint16 {
 	// Skip 4B header, nkeys*8B pointers, and nkeys*2B offsets. Go to offset.
 	return 4 + (node.nkeys() * 8) + (node.nkeys() * 2) + node.getOffset(idx)
 }
 
-func (node BNode) getKey(idx uint16) ([]byte, error) {
+func (node BNode) GetKey(idx uint16) ([]byte, error) {
 	if idx >= node.nkeys() {
 		return nil, ErrIndex("list index out of range")
 	}
 	return KeyValue(node[node.keyValuePosition(idx):node.keyValuePosition(idx+1)]).getKey(), nil
 }
 
-func (node BNode) getValue(idx uint16) ([]byte, error) {
+func (node BNode) GetValue(idx uint16) ([]byte, error) {
 	if idx >= node.nkeys() {
 		return nil, ErrIndex("list index out of range")
 	}
@@ -101,6 +123,17 @@ func (node BNode) getValue(idx uint16) ([]byte, error) {
 // | key_size | val_size | key | val |
 // |    2B    |    2B    | ... | ... |
 type KeyValue []byte
+
+func newKeyValue(data, key, value []byte) KeyValue {
+	binary.LittleEndian.PutUint16(data[0:], uint16(len(key)))
+	binary.LittleEndian.PutUint16(data[2:], uint16(len(value)))
+	// Skip 4B header.
+	copy(data[4:], key)
+	// Skip 4B header and key.
+	copy(data[4+uint16(len(key)):], value)
+	// Return slice up to value.
+	return KeyValue(data[:4+uint16(len(key)+len(value))])
+}
 
 func (kv KeyValue) keySize() uint16 {
 	return binary.LittleEndian.Uint16(kv[0:2])
