@@ -1,7 +1,10 @@
 package main
 
-import "fmt"
+import "db/db"
 
 func main() {
-	fmt.Println("Hello, World!")
+	node := db.BNode(make([]byte, db.BTREE_PAGE_SIZE))
+	node.SetHeader(db.BTREE_NODE_TYPE_LEAF, 2)
+	db.NodeAppendKV(node, 0, 0, []byte("k1"), []byte("hi"))
+	db.NodeAppendKV(node, 1, 0, []byte("k2"), []byte("hello"))
 }
