@@ -1,4 +1,4 @@
-package db
+package io
 
 import (
 	"fmt"
