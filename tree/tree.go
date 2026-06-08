@@ -2,6 +2,7 @@ package tree
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 )
 
@@ -9,17 +10,106 @@ const (
 	NODE_TYPE_INTERNAL = 1
 	NODE_TYPE_LEAF     = 2
 	PAGE_SIZE          = 4096 // bytes
-	MAX_KEY_SIZE       = 1000 // bytes
-	MAX_VAL_SIZE       = 3000 // bytes
 )
 
 func init() {
 	// Worst-case (node with 1 key-value pair):
 	// 2B type, 2B nkeys, 1x8B pointers, 1x2B offsets, 1*4B key/value sizes, xB key, yB value.
-	nodeSize := 2 + 2 + 8 + 2 + 4 + MAX_KEY_SIZE + MAX_VAL_SIZE
+	nodeSize := 2 + 2 + 8 + 2 + 4 + MAX_KEY_SIZE + MAX_VALUE_SIZE
 	if nodeSize > PAGE_SIZE {
 		log.Panicf("tree config incompatible, worst-case node %d exceeds page size %d", nodeSize, PAGE_SIZE)
 	}
+}
+
+type BTree struct {
+	// Root pointer.
+	root uint64
+
+	// Disk callbacks.
+
+	// Read data from a page number.
+	get func(uint64) []byte
+	// Allocate a new page number with data.
+	new func([]byte) uint64
+	// Deallocate a page number.
+	del func(uint64)
+}
+
+// Insert or update a keyed value.
+func (t *BTree) Insert(key, value []byte) error {
+	if err := (KeyValue{}).validateSize(key, value); err != nil {
+		return fmt.Errorf("inserting key-value pair: %w", err)
+	}
+
+	if t.root == 0 {
+		// Tree is empty, this is the first node.
+		root := BNode(make([]byte, PAGE_SIZE))
+		root.SetHeader(NODE_TYPE_LEAF, 2)
+		// Add a dummy key. This means tree covers the whole key space, ensuring lookups will always find a containing node.
+		NodeAppendKeyValue(root, 0, 0, nil, nil)
+		NodeAppendKeyValue(root, 1, 0, key, value)
+		t.root = t.new(root)
+		return nil
+	}
+
+	node := TreeInsert(t, t.get(t.root), key, value)
+
+	// Check if node needs to split.
+	nsplit, split := NodeSplit3(node)
+	t.del(t.root)
+	if nsplit > 1 {
+		// Root has split, create a new root and add split nodes as children.
+		root := BNode(make([]byte, PAGE_SIZE))
+		root.SetHeader(NODE_TYPE_LEAF, nsplit)
+		for i, childNode := range split[:nsplit] {
+			ptr, key := t.new(childNode), childNode.GetKey(0)
+			NodeAppendKeyValue(root, uint16(i), ptr, key, nil)
+		}
+		t.root = t.new(root)
+	} else {
+		// Root hasn't split.
+		t.root = t.new(split[0])
+	}
+	return nil
+}
+
+// Delete a keyed value, returning whether it existed or not.
+func (t *BTree) Delete(key []byte) (bool, error) {
+	return false, nil
+}
+
+func TreeInsert(tree *BTree, node BNode, key, value []byte) BNode {
+	newNode := BNode(make([]byte, 2*PAGE_SIZE)) // Double as it may be split later.
+	idx := NodeLookupLessThanOrEqual(node, key)
+	switch node.btype() {
+	case NODE_TYPE_LEAF:
+		if bytes.Equal(key, node.GetKey(idx)) {
+			// Matching key, update it.
+			LeafUpdate(newNode, node, idx, key, value)
+		} else {
+			// No matching key, idx is the place to insert it.
+			LeafInsert(newNode, node, idx, key, value)
+		}
+	case NODE_TYPE_INTERNAL:
+		// Recursively scan down tree to update lead node.
+		childPtr := node.getPtr(idx)
+		childNode := TreeInsert(tree, tree.get(childPtr), key, value)
+
+		// Split the child node in case it has exceeded the page size and replace.
+		nsplit, split := NodeSplit3(childNode)
+		tree.del(childPtr)
+		NodeReplaceChildN(tree, newNode, node, idx, split[:nsplit]...)
+	}
+	return newNode
+}
+
+func NodeReplaceChildN(tree *BTree, newNode, oldNode BNode, idx uint16, childNodes ...BNode) {
+	newNode.SetHeader(NODE_TYPE_INTERNAL, oldNode.nkeys()+uint16(len(childNodes))-1)
+	NodeAppendRange(newNode, oldNode, 0, 0, idx)
+	for i, childNode := range childNodes {
+		NodeAppendKeyValue(newNode, idx+uint16(i), tree.new(childNode), childNode.GetKey(0), nil)
+	}
+	NodeAppendRange(newNode, oldNode, idx+uint16(len(childNodes)), idx+1, oldNode.nkeys()-idx-1)
 }
 
 func LeafInsert(newNode, oldNode BNode, idx uint16, key, value []byte) {

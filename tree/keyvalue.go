@@ -2,7 +2,26 @@ package tree
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 )
+
+const (
+	MAX_KEY_SIZE   = 1000 // bytes
+	MAX_VALUE_SIZE = 3000 // bytes
+)
+
+type ErrKeyExceedsMaxSize struct{}
+
+func (ErrKeyExceedsMaxSize) Error() string {
+	return fmt.Sprintf("key exceeds max size %d", MAX_KEY_SIZE)
+}
+
+type ErrValueExceedsMaxSize struct{}
+
+func (ErrValueExceedsMaxSize) Error() string {
+	return fmt.Sprintf("value exceeds max size %d", MAX_VALUE_SIZE)
+}
 
 // Binary format:
 // |        header       |   data    |
@@ -19,6 +38,17 @@ func newKeyValue(data, key, value []byte) KeyValue {
 	copy(data[4+uint16(len(key)):], value)
 	// Return slice up to value.
 	return KeyValue(data[:4+uint16(len(key)+len(value))])
+}
+
+func (KeyValue) validateSize(key, value []byte) error {
+	var err error
+	if len(key) > MAX_KEY_SIZE {
+		err = errors.Join(err, ErrKeyExceedsMaxSize{})
+	}
+	if len(value) > MAX_VALUE_SIZE {
+		err = errors.Join(err, ErrValueExceedsMaxSize{})
+	}
+	return err
 }
 
 func (kv KeyValue) keySize() uint16 {
