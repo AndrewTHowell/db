@@ -21,7 +21,7 @@ func init() {
 	}
 }
 
-type BTree struct {
+type Tree struct {
 	// Root pointer.
 	root uint64
 
@@ -35,35 +35,43 @@ type BTree struct {
 	del func(uint64)
 }
 
+func New(get func(uint64) []byte, new func([]byte) uint64, del func(uint64)) Tree {
+	return Tree{
+		get: get,
+		new: new,
+		del: del,
+	}
+}
+
 // Insert or update a keyed value.
-func (t *BTree) Insert(key, value []byte) error {
+func (t *Tree) Insert(key, value []byte) error {
 	if err := (KeyValue{}).validateSize(key, value); err != nil {
 		return fmt.Errorf("inserting key-value pair: %w", err)
 	}
 
 	if t.root == 0 {
 		// Tree is empty, this is the first node.
-		root := BNode(make([]byte, PAGE_SIZE))
-		root.SetHeader(NODE_TYPE_LEAF, 2)
+		root := Node(make([]byte, PAGE_SIZE))
+		root.setHeader(NODE_TYPE_LEAF, 2)
 		// Add a dummy key. This means tree covers the whole key space, ensuring lookups will always find a containing node.
-		NodeAppendKeyValue(root, 0, 0, nil, nil)
-		NodeAppendKeyValue(root, 1, 0, key, value)
+		nodeAppendKeyValue(root, 0, 0, nil, nil)
+		nodeAppendKeyValue(root, 1, 0, key, value)
 		t.root = t.new(root)
 		return nil
 	}
 
-	node := TreeInsert(t, t.get(t.root), key, value)
+	node := treeInsert(t, t.get(t.root), key, value)
 
 	// Check if node needs to split.
-	nsplit, split := NodeSplit3(node)
+	nsplit, split := nodeSplit3(node)
 	t.del(t.root)
 	if nsplit > 1 {
 		// Root has split, create a new root and add split nodes as children.
-		root := BNode(make([]byte, PAGE_SIZE))
-		root.SetHeader(NODE_TYPE_LEAF, nsplit)
+		root := Node(make([]byte, PAGE_SIZE))
+		root.setHeader(NODE_TYPE_LEAF, nsplit)
 		for i, childNode := range split[:nsplit] {
-			ptr, key := t.new(childNode), childNode.GetKey(0)
-			NodeAppendKeyValue(root, uint16(i), ptr, key, nil)
+			ptr, key := t.new(childNode), childNode.setKey(0)
+			nodeAppendKeyValue(root, uint16(i), ptr, key, nil)
 		}
 		t.root = t.new(root)
 	} else {
@@ -74,87 +82,87 @@ func (t *BTree) Insert(key, value []byte) error {
 }
 
 // Delete a keyed value, returning whether it existed or not.
-func (t *BTree) Delete(key []byte) (bool, error) {
+func (t *Tree) Delete(key []byte) (bool, error) {
 	return false, nil
 }
 
-func TreeInsert(tree *BTree, node BNode, key, value []byte) BNode {
-	newNode := BNode(make([]byte, 2*PAGE_SIZE)) // Double as it may be split later.
-	idx := NodeLookupLessThanOrEqual(node, key)
+func treeInsert(tree *Tree, node Node, key, value []byte) Node {
+	newNode := Node(make([]byte, 2*PAGE_SIZE)) // Double as it may be split later.
+	idx := nodeLookupLessThanOrEqual(node, key)
 	switch node.btype() {
 	case NODE_TYPE_LEAF:
-		if bytes.Equal(key, node.GetKey(idx)) {
+		if bytes.Equal(key, node.setKey(idx)) {
 			// Matching key, update it.
-			LeafUpdate(newNode, node, idx, key, value)
+			leafUpdate(newNode, node, idx, key, value)
 		} else {
 			// No matching key, idx is the place to insert it.
-			LeafInsert(newNode, node, idx, key, value)
+			leafInsert(newNode, node, idx, key, value)
 		}
 	case NODE_TYPE_INTERNAL:
 		// Recursively scan down tree to update lead node.
 		childPtr := node.getPtr(idx)
-		childNode := TreeInsert(tree, tree.get(childPtr), key, value)
+		childNode := treeInsert(tree, tree.get(childPtr), key, value)
 
 		// Split the child node in case it has exceeded the page size and replace.
-		nsplit, split := NodeSplit3(childNode)
+		nsplit, split := nodeSplit3(childNode)
 		tree.del(childPtr)
-		NodeReplaceChildN(tree, newNode, node, idx, split[:nsplit]...)
+		nodeReplaceChildN(tree, newNode, node, idx, split[:nsplit]...)
 	}
 	return newNode
 }
 
-func NodeReplaceChildN(tree *BTree, newNode, oldNode BNode, idx uint16, childNodes ...BNode) {
-	newNode.SetHeader(NODE_TYPE_INTERNAL, oldNode.nkeys()+uint16(len(childNodes))-1)
-	NodeAppendRange(newNode, oldNode, 0, 0, idx)
+func nodeReplaceChildN(tree *Tree, newNode, oldNode Node, idx uint16, childNodes ...Node) {
+	newNode.setHeader(NODE_TYPE_INTERNAL, oldNode.nkeys()+uint16(len(childNodes))-1)
+	nodeAppendRange(newNode, oldNode, 0, 0, idx)
 	for i, childNode := range childNodes {
-		NodeAppendKeyValue(newNode, idx+uint16(i), tree.new(childNode), childNode.GetKey(0), nil)
+		nodeAppendKeyValue(newNode, idx+uint16(i), tree.new(childNode), childNode.setKey(0), nil)
 	}
-	NodeAppendRange(newNode, oldNode, idx+uint16(len(childNodes)), idx+1, oldNode.nkeys()-idx-1)
+	nodeAppendRange(newNode, oldNode, idx+uint16(len(childNodes)), idx+1, oldNode.nkeys()-idx-1)
 }
 
-func LeafInsert(newNode, oldNode BNode, idx uint16, key, value []byte) {
-	newNode.SetHeader(NODE_TYPE_LEAF, oldNode.nkeys()+1)
-	NodeAppendRange(newNode, oldNode, 0, 0, idx)
-	NodeAppendKeyValue(newNode, idx, 0, key, value)
-	NodeAppendRange(newNode, oldNode, idx+1, idx, oldNode.nkeys()-idx)
+func leafInsert(newNode, oldNode Node, idx uint16, key, value []byte) {
+	newNode.setHeader(NODE_TYPE_LEAF, oldNode.nkeys()+1)
+	nodeAppendRange(newNode, oldNode, 0, 0, idx)
+	nodeAppendKeyValue(newNode, idx, 0, key, value)
+	nodeAppendRange(newNode, oldNode, idx+1, idx, oldNode.nkeys()-idx)
 }
 
-func LeafUpdate(newNode, oldNode BNode, idx uint16, key, value []byte) {
-	newNode.SetHeader(NODE_TYPE_LEAF, oldNode.nkeys())
-	NodeAppendRange(newNode, oldNode, 0, 0, idx)
-	NodeAppendKeyValue(newNode, idx, 0, key, value)
-	NodeAppendRange(newNode, oldNode, idx+1, idx+1, oldNode.nkeys()-idx-1)
+func leafUpdate(newNode, oldNode Node, idx uint16, key, value []byte) {
+	newNode.setHeader(NODE_TYPE_LEAF, oldNode.nkeys())
+	nodeAppendRange(newNode, oldNode, 0, 0, idx)
+	nodeAppendKeyValue(newNode, idx, 0, key, value)
+	nodeAppendRange(newNode, oldNode, idx+1, idx+1, oldNode.nkeys()-idx-1)
 }
 
-func NodeSplit3(node BNode) (uint16, [3]BNode) {
+func nodeSplit3(node Node) (uint16, [3]Node) {
 	if node.nbytes() <= PAGE_SIZE {
 		// Node within page size, don't split.
 		node = node[:PAGE_SIZE]
-		return 1, [3]BNode{node}
+		return 1, [3]Node{node}
 	}
 
-	left := BNode(make([]byte, 2*PAGE_SIZE)) // Double as it may be split later.
-	right := BNode(make([]byte, PAGE_SIZE))
-	NodeSplit2(left, right, node)
+	left := Node(make([]byte, 2*PAGE_SIZE)) // Double as it may be split later.
+	right := Node(make([]byte, PAGE_SIZE))
+	nodeSplit2(left, right, node)
 	if left.nbytes() <= PAGE_SIZE {
 		left = left[:PAGE_SIZE]
-		return 2, [3]BNode{left, right}
+		return 2, [3]Node{left, right}
 	}
 
-	newLeft := BNode(make([]byte, PAGE_SIZE))
-	middle := BNode(make([]byte, PAGE_SIZE))
-	NodeSplit2(newLeft, middle, left)
+	newLeft := Node(make([]byte, PAGE_SIZE))
+	middle := Node(make([]byte, PAGE_SIZE))
+	nodeSplit2(newLeft, middle, left)
 	// newLeft is now guaranteed to not be exceeding page size.
-	return 3, [3]BNode{newLeft, middle, right}
+	return 3, [3]Node{newLeft, middle, right}
 }
 
 // Splits the old node into a left and right node. The right node is guaranteed to be within the page size.
 // Assumes old node has 2+ keys.
-func NodeSplit2(leftNode, rightNode, oldNode BNode) {
+func nodeSplit2(leftNode, rightNode, oldNode Node) {
 	// Greedily guess the number of keys to go into leftNode.
 	nleft := oldNode.nkeys() / 2
 	nleftBytes := func() uint16 {
-		return (BNode{}).estimateBytes(nleft, oldNode.getOffset(nleft))
+		return (Node{}).estimateBytes(nleft, oldNode.getOffset(nleft))
 	}
 	for nleftBytes() > PAGE_SIZE {
 		nleft--
@@ -172,19 +180,19 @@ func NodeSplit2(leftNode, rightNode, oldNode BNode) {
 	nright := oldNode.nkeys() - nleft
 
 	// Write left node. Note: no guarantee here that it isn't exceeding page size.
-	leftNode.SetHeader(oldNode.btype(), nleft)
-	NodeAppendRange(leftNode, oldNode, 0, 0, nleft)
+	leftNode.setHeader(oldNode.btype(), nleft)
+	nodeAppendRange(leftNode, oldNode, 0, 0, nleft)
 
 	// Write right node. It is guaranteed to not be exceeding page size.
-	rightNode.SetHeader(oldNode.btype(), nright)
-	NodeAppendRange(leftNode, oldNode, 0, nleft, nright)
+	rightNode.setHeader(oldNode.btype(), nright)
+	nodeAppendRange(leftNode, oldNode, 0, nleft, nright)
 }
 
 // Find the last postion that is less than or equal to the key.
-func NodeLookupLessThanOrEqual(node BNode, key []byte) uint16 {
+func nodeLookupLessThanOrEqual(node Node, key []byte) uint16 {
 	// Could be done using binary search.
 	for i := range node.nkeys() {
-		cmp := bytes.Compare(node.GetKey(i), key)
+		cmp := bytes.Compare(node.setKey(i), key)
 		if cmp == 0 {
 			// Equal
 			return i
@@ -197,14 +205,14 @@ func NodeLookupLessThanOrEqual(node BNode, key []byte) uint16 {
 	return node.nkeys() - 1
 }
 
-func NodeAppendRange(newNode, oldNode BNode, dstNew, srcOld, n uint16) {
+func nodeAppendRange(newNode, oldNode Node, dstNew, srcOld, n uint16) {
 	for i := range n {
 		dst, src := dstNew+i, srcOld+i
-		NodeAppendKeyValue(newNode, dst, oldNode.getPtr(src), oldNode.GetKey(src), oldNode.GetValue(src))
+		nodeAppendKeyValue(newNode, dst, oldNode.getPtr(src), oldNode.setKey(src), oldNode.setValue(src))
 	}
 }
 
-func NodeAppendKeyValue(node BNode, idx uint16, ptr uint64, key, value []byte) {
+func nodeAppendKeyValue(node Node, idx uint16, ptr uint64, key, value []byte) {
 	node.setPtr(idx, ptr)
 	keyValue := newKeyValue(node[node.keyValuePosition(idx):], key, value)
 	// Set offset for next key.

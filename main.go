@@ -3,14 +3,42 @@ package main
 import (
 	"db/tree"
 	"fmt"
+	"log"
+	"unsafe"
 )
 
 func main() {
-	node := tree.BNode(make([]byte, tree.PAGE_SIZE))
-	node.SetHeader(tree.NODE_TYPE_LEAF, 2)
-	tree.NodeAppendKeyValue(node, 0, 0, []byte("k1"), []byte("hi"))
-	tree.NodeAppendKeyValue(node, 1, 0, []byte("k2"), []byte("hello"))
+	pages := map[uint64]tree.Node{} // In-memory pages.
 
-	fmt.Println(string(node.GetKey(0)), string(node.GetValue(0)))
-	fmt.Println(string(node.GetKey(1)), string(node.GetValue(1)))
+	t := tree.New(
+		func(ptr uint64) []byte {
+			node, ok := pages[ptr]
+			if !ok {
+				log.Panic("page doesn't exist")
+			}
+			return node
+		},
+		func(data []byte) uint64 {
+			ptr := uint64(uintptr(unsafe.Pointer(&data[0])))
+			_, ok := pages[ptr]
+			if ok {
+				log.Panic("page already exists")
+			}
+			pages[ptr] = data
+			return ptr
+		},
+		func(ptr uint64) {
+			_, ok := pages[ptr]
+			if !ok {
+				log.Panic("page doesn't exist")
+			}
+			delete(pages, ptr)
+		},
+	)
+	fmt.Println(t.Insert([]byte("k1"), []byte("hi")))
+	fmt.Println(t.Insert([]byte("k2"), []byte("hello")))
+
+	for _, page := range pages {
+		fmt.Println(string(page))
+	}
 }

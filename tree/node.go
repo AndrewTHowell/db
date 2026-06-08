@@ -8,45 +8,45 @@ import (
 // |    header    |                        data                   |
 // | type | nkeys |  pointers  |  offsets   | key-values | unused |
 // |  2B  |   2B  | nkeys × 8B | nkeys × 2B |     ...    |        |
-type BNode []byte
+type Node []byte
 
-func (BNode) estimateBytes(nkeys, offset uint16) uint16 {
+func (Node) estimateBytes(nkeys, offset uint16) uint16 {
 	// Header + 8B pointer per key + 2B offset per key + size of key-values up to offset.
 	return 4 + 8*nkeys + 2*nkeys + offset
 }
 
-func (node BNode) btype() uint16 {
+func (node Node) btype() uint16 {
 	return binary.LittleEndian.Uint16(node[0:2])
 }
 
-func (node BNode) nkeys() uint16 {
+func (node Node) nkeys() uint16 {
 	return binary.LittleEndian.Uint16(node[2:4])
 }
 
-func (node BNode) nbytes() uint16 {
+func (node Node) nbytes() uint16 {
 	// Number of bytes is equivalent to the byte position of the next key-value.
 	return node.keyValuePosition(node.nkeys())
 }
 
-func (node BNode) SetHeader(btype, nkeys uint16) {
+func (node Node) setHeader(btype, nkeys uint16) {
 	binary.LittleEndian.PutUint16(node[0:2], btype)
 	binary.LittleEndian.PutUint16(node[2:4], nkeys)
 }
 
 // Assumes idx has been validated to be within valid range.
-func (node BNode) getPtr(idx uint16) uint64 {
+func (node Node) getPtr(idx uint16) uint64 {
 	// Skip 4B header. Go to Nth ptr with each ptr being 8B.
 	return binary.LittleEndian.Uint64(node[4+(idx*8):])
 }
 
 // Assumes idx has been validated to be within valid range.
-func (node BNode) setPtr(idx uint16, value uint64) {
+func (node Node) setPtr(idx uint16, value uint64) {
 	// Skip 4B header. Go to Nth ptr with each ptr being 8B.
 	binary.LittleEndian.PutUint64(node[4+(idx*8):], value)
 }
 
 // Assumes idx has been validated to be within valid range.
-func (node BNode) getOffset(idx uint16) uint16 {
+func (node Node) getOffset(idx uint16) uint16 {
 	if idx == 0 {
 		// First offset isn't stored, it's always zero.
 		return 0
@@ -57,7 +57,7 @@ func (node BNode) getOffset(idx uint16) uint16 {
 }
 
 // Assumes idx has been validated to be within valid range.
-func (node BNode) setOffset(idx, offset uint16) {
+func (node Node) setOffset(idx, offset uint16) {
 	if idx == 0 {
 		// First offset isn't stored, it's always zero.
 		return
@@ -68,17 +68,17 @@ func (node BNode) setOffset(idx, offset uint16) {
 }
 
 // Assumes idx has been validated to be within valid range.
-func (node BNode) keyValuePosition(idx uint16) uint16 {
+func (node Node) keyValuePosition(idx uint16) uint16 {
 	// Skip 4B header, nkeys*8B pointers, and nkeys*2B offsets. Go to offset.
 	return 4 + (node.nkeys() * 8) + (node.nkeys() * 2) + node.getOffset(idx)
 }
 
 // Assumes idx has been validated to be within valid range.
-func (node BNode) GetKey(idx uint16) []byte {
+func (node Node) setKey(idx uint16) []byte {
 	return KeyValue(node[node.keyValuePosition(idx):node.keyValuePosition(idx+1)]).getKey()
 }
 
 // Assumes idx has been validated to be within valid range.
-func (node BNode) GetValue(idx uint16) []byte {
+func (node Node) setValue(idx uint16) []byte {
 	return KeyValue(node[node.keyValuePosition(idx):node.keyValuePosition(idx+1)]).getValue()
 }
